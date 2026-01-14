@@ -1,69 +1,114 @@
 import csv
 import requests
-from io import StringIO
+
 from pathlib import Path
-from time import sleep
+from time import perf_counter, sleep, time, localtime, strftime
+from temp import temp
+from helpers import helpers
 
 csv_url = "https://docs.google.com/spreadsheets/d/e/2PACX-1vTV-Hit42Sq3zXsn88tFLRb7S4cpt-TCHuHI1tdbLnsVxe1CuwT9j650IehaBuhsu40vFnNvL18eqJb/pub?output=csv"
 local_csv_path = Path("cached_google_sheet.csv")
 step=5 #minutos de pause entre step
+room_temp=15 #celsius
+T=temp()
+H=helpers()
+IPS=[]
+HYPER=[]
 
-def read_csv_text(text):
-    csv_file = StringIO(text)
-    reader = csv.reader(csv_file)
-    return [row for row in reader]
+# Tasmota controllers
+def on(HOST):
+    requests.get(f"http://{HOST}/cm?cmnd=Power On")
 
+def off(HOST):
+    requests.get(f"http://{HOST}/cm?cmnd=Power Off")
 
-def google_csv_to_list(url, local_path):
-    try:
-        # Try downloading from internet
-        print("Downloading CSV from Google Sheets...")
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-
-        # Save locally
-        local_path.write_text(response.text, encoding="utf-8")
-
-        return read_csv_text(response.text)
-
-    except Exception as e:
-        print(f"Download failed ({e})")
-
-        # Fallback to local file
-        if local_path.exists():
-            print("Using cached local CSV")
-            text = local_path.read_text(encoding="utf-8")
-            return read_csv_text(text)
-        else:
-            raise RuntimeError("No internet connection and no local CSV cache found")
+def state(HOST):
+    r = requests.get(f"http://{HOST}/cm?cmnd=Power")
+    print(r.text)
 
 
 # Usage
-csv_data = google_csv_to_list(csv_url, local_csv_path)
+csv_data = H.google_csv_to_list(csv_url, local_csv_path)
 
 seq = []
+
+temps=[]
+
 
 counter=0
 seq_start=False
 
 # Inspect result
 for r in csv_data:
+    if r[0]=="IP":
+        for ip in range(1,6):
+            if r[ip]!="":
+                IPS.append(r[ip])
+        # Turn off to cleanup
+        for ip in IPS:
+            off(ip)
+      
+        # Set starting room temp
+        temps.append([room_temp for i in IPS])
+
+    if r[0]=="alpha":
+        for iii in range(1,6):
+            if r[iii]!="":
+                HYPER.append({'alpha':float(r[iii])})
+
+    if r[0]=="t_max":
+        for iii in range(1,6):
+            if r[iii]!="":
+                HYPER[iii-1]['t_max']=float(r[iii])
+    
     if r[0]=="Secuencia":
         #empieza la parte secuencia
         seq_start=True
     if seq_start:
-        row=[]
-        for res in range(6):
-            valor=False
-            if r[res]!="":
-                valor=True
-            row.append(valor)
-        seq.append(row)
+        #Convertimos las secuencias de 5 min en bloques de 1 segundo
+        for b in range(step*60):
+            row=[]
+            for res in range(6):
+                valor=False
+                if r[res]!="":
+                    valor=True
+                row.append(valor)
+            seq.append(row)
 
 #print (seq)
+#print(HYPER)
 
-for i,s in enumerate(seq):
-    minuto=i*step
-    print(f"step {minuto} minutos")
-    print(s)
-    sleep(step*60)
+period_s = 1.0
+next_tick = perf_counter() + period_s
+for i, s in enumerate(seq):
+    
+
+    temprow=[]
+    for index,state in enumerate(s):
+        
+        if index < len(IPS):
+            # Calcular temperatura+
+            temp=0
+            t_max=HYPER[index]['t_max']
+            alpha=HYPER[index]['alpha']
+            if state:
+                on(IPS[index])
+                temp=T.update_temperature(temps[-1][index],True,room_temp,t_max,alpha)
+            else:
+                off(IPS[index])
+                temp=T.update_temperature(temps[-1][index],False,room_temp,t_max,alpha)
+        temprow.append(temp)    
+    temps.append(temprow)
+
+    if i % 60 == 0:
+        print("minute", i // 60, strftime("%Y-%m-%d %H:%M:%S", localtime(time())), s, temprow)
+
+
+    now = perf_counter()
+    remaining = next_tick - now
+    if remaining > 0:
+        sleep(remaining)
+        next_tick += period_s
+    else:
+        next_tick = now + period_s
+        
