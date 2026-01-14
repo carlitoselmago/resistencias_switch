@@ -15,6 +15,9 @@ H=helpers()
 IPS=[]
 HYPER=[]
 
+#máxima temperatura a la que deberia estar cualquier resistencia
+max_temp=100
+
 # Tasmota controllers
 def on(HOST):
     requests.get(f"http://{HOST}/cm?cmnd=Power On")
@@ -91,12 +94,22 @@ for i, s in enumerate(seq):
             temp=0
             t_max=HYPER[index]['t_max']
             alpha=HYPER[index]['alpha']
+            
             if state:
-                on(IPS[index])
+                
                 temp=T.update_temperature(temps[-1][index],True,room_temp,t_max,alpha)
+                if temp>=max_temp:
+                    # IF we reach the max temperature we need to cool off
+                    print("*"*10,f"COOLING OFF resistencia{index}","*"*10)
+                    state=False
+                    temp=T.update_temperature(temps[-1][index],False,room_temp,t_max,alpha)
+                    off(IPS[index])
+                    
+                else:
+                    on(IPS[index])
             else:
-                off(IPS[index])
                 temp=T.update_temperature(temps[-1][index],False,room_temp,t_max,alpha)
+                off(IPS[index])
         temprow.append(temp)    
     temps.append(temprow)
 
