@@ -32,7 +32,7 @@ INIT_TEMPS_OVERRIDE = args.init_temps or []
 # OUTPUT MODE
 # =============================
 
-USE_PRINT = True   # True = print(), False = logging
+USE_PRINT = False  # True = print(), False = logging
 
 
 # =============================
